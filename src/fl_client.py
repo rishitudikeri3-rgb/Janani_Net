@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, TensorDataset
 
 from model import MaternalRiskMLP
 from preprocessing import load_raw, preprocess
@@ -74,24 +75,34 @@ class MaternalRiskClient(fl.client.NumPyClient):
         local_epochs = config.get("local_epochs", 5)
         lr = config.get("lr", 1e-3)
         mu = config.get("proximal_mu", 0.0)
+        batch_size = config.get("batch_size", 16)
+
+        train_loader = DataLoader(
+            TensorDataset(self.X_train, self.y_train), batch_size=batch_size, shuffle=True
+        )
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         criterion = nn.CrossEntropyLoss()
 
         self.model.train()
+        epoch_loss = 0.0
         for _ in range(local_epochs):
-            optimizer.zero_grad()
-            loss = criterion(self.model(self.X_train), self.y_train)
-            if mu > 0:
-                proximal_term = sum(
-                    (local_w - global_w).norm(2) ** 2
-                    for local_w, global_w in zip(self.model.parameters(), global_params)
-                )
-                loss = loss + (mu / 2) * proximal_term
-            loss.backward()
-            optimizer.step()
+            epoch_loss = 0.0
+            for xb, yb in train_loader:
+                optimizer.zero_grad()
+                loss = criterion(self.model(xb), yb)
+                if mu > 0:
+                    proximal_term = sum(
+                        (local_w - global_w).norm(2) ** 2
+                        for local_w, global_w in zip(self.model.parameters(), global_params)
+                    )
+                    loss = loss + (mu / 2) * proximal_term
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item() * len(xb)
+            epoch_loss /= len(self.X_train)
 
-        return get_parameters(self.model), len(self.X_train), {"train_loss": loss.item()}
+        return get_parameters(self.model), len(self.X_train), {"train_loss": epoch_loss}
 
     def evaluate(self, parameters, config):
         set_parameters(self.model, parameters)
