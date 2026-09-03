@@ -73,18 +73,58 @@ each has a visibly different risk-level mix, which is the whole point:
 
 ![Bar chart showing Low/Mid/High risk case counts per simulated hospital, visibly skewed differently per client](figures/client_class_distribution.png)
 
+## Does FedProx actually help under stronger client skew?
+
+The chart above only tests one skew level (alpha=0.5). FedProx's whole
+reason to exist is a regularizer that should matter more as clients get
+*more* skewed — so that's a testable claim, not just an assumption. Same
+setup, swept across alpha ∈ {0.1, 0.3, 0.5} (0.1 = most skewed), 3 seeds
+each, 20 rounds (lower than the 40-round headline run, to keep the 18
+total runs tractable):
+
+| Alpha | FedAvg (mean ± std) | FedProx (mean ± std) |
+|---|---|---|
+| 0.1 (most skewed) | 46.8% ± 4.4 | 46.0% ± 4.9 |
+| 0.3 | 59.9% ± 9.3 | 59.6% ± 9.1 |
+| 0.5 | 61.7% ± 7.5 | 59.9% ± 8.7 |
+
+![Line chart of final centralized accuracy vs. Dirichlet alpha for FedAvg and FedProx, with error bars across 3 seeds; both lines track closely at every alpha, with FedAvg slightly ahead throughout](figures/alpha_sweep.png)
+
+**Honest result: FedProx did not outperform FedAvg at any skew level
+tested, including the most extreme.** The two strategies track each other
+closely everywhere, with FedAvg if anything slightly ahead. Two things
+this sweep does make clear, though:
+
+- **Seed-to-seed variance (±4-9 points) is bigger than the strategy gap
+  (~1-2 points).** With only 5 clients and one random split, which
+  patients land on which client matters more to the final number than
+  which aggregation rule is used. At alpha=0.5 alone, the three seeds
+  ranged from 50.2% to 67.0% final accuracy.
+- **Skew itself has a real, large effect regardless of strategy** —
+  accuracy drops from ~60-62% (alpha 0.5) to ~47% (alpha 0.1). That's the
+  core non-IID motivation for this project showing up cleanly; it's just
+  that FedProx's specific fix for it didn't show a measurable edge here.
+  Plausible reasons worth trying next: `--proximal-mu 0.1` may be too weak
+  at this client count, or FedProx's benefit usually shows up more under
+  *partial* client participation per round (stragglers/heterogeneous
+  compute) — this setup always uses all 5 clients every round, which
+  leaves less for the proximal term to correct.
+
 ## Notes / honest caveats
 
-- Single run, single seed — no averaging across multiple random splits, so
-  there's real run-to-run variance not captured here.
+- Single run, single seed on the headline 40-round chart above — the
+  alpha sweep just above measures this spread directly (±7-9 points at
+  alpha=0.5 across 3 seeds), so read the exact numbers in that chart as
+  one sample from that range, not a precise reading.
 - The dataset's "Mid risk" class inherently overlaps with Low and High in
   the raw vitals (visible in the baseline's per-class report — Mid recall
   is only 0.36 vs. 0.84/0.91 for Low/High); that ceiling is baked into
   every number above, not something federation makes worse.
-- FedProx didn't clearly beat FedAvg at this moderate skew level
-  (alpha=0.5) with uniform local computation across clients — its proximal
-  term is a regularizer that's expected to matter more under stronger
-  non-IID skew (lower alpha) or heterogeneous client compute.
+- FedProx's proximal term did not measurably beat FedAvg even down to
+  alpha=0.1 (see the sweep above) — before concluding it doesn't help
+  here, worth trying a larger `--proximal-mu` or partial client
+  participation per round, where FedProx's benefit is usually more
+  pronounced.
 - Flower's own simulation runner (`start_simulation`/`run_simulation`)
   requires the `ray` package, which has no build for Python 3.14 on
   Windows yet. `scripts/run_fl.py` works around this with a manual
@@ -113,6 +153,7 @@ python scripts/train_baseline.py              # centralized MLP baseline
 python scripts/test_client.py                 # smoke-test the Flower client in isolation
 python scripts/run_fl.py --strategy fedprox   # one federated run (fedavg or fedprox)
 python scripts/compare_strategies.py          # both strategies + the comparison chart
+python scripts/sweep_alpha.py                 # both strategies x 3 alphas x 3 seeds + the sweep chart
 ```
 
 Every script is a CLI with `--num-clients`, `--alpha`, `--num-rounds`, etc.

@@ -49,6 +49,15 @@ def load_client_data(
     can_stratify = np.all(class_counts[class_counts > 0] >= 2) and len(X_client) >= 5
     stratify = y_client if can_stratify else None
 
+    # Very small shards (can happen at strongly-skewed Dirichlet alpha, where a
+    # client can land with a single sample) can't support a held-out val split
+    # without leaving train or val empty - reuse the whole shard for both
+    # rather than crashing. This client's local training/eval numbers become
+    # less meaningful, but that's an honest reflection of "this hospital barely
+    # has any data," not a bug to hide.
+    if len(X_client) < 5:
+        return X_client, y_client, X_client, y_client
+
     X_train, X_val, y_train, y_val = train_test_split(
         X_client, y_client, test_size=val_fraction, stratify=stratify, random_state=seed
     )
