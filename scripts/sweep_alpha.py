@@ -51,6 +51,13 @@ def parse_args():
     p.add_argument("--proximal-mu", type=float, default=0.1)
     p.add_argument("--local-epochs", type=int, default=5)
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument(
+        "--heterogeneous-epochs", action="store_true",
+        help="passthrough to run_fl.py - simulate clients with different local compute budgets, "
+             "the systems-heterogeneity scenario FedProx's proximal term targets",
+    )
+    p.add_argument("--epochs-min", type=int, default=2)
+    p.add_argument("--epochs-max", type=int, default=8)
     return p.parse_args()
 
 
@@ -67,6 +74,9 @@ def run_one(strategy, alpha, seed, args) -> float:
         "--local-epochs", str(args.local_epochs),
         "--lr", str(args.lr),
     ]
+    if args.heterogeneous_epochs:
+        cmd += ["--heterogeneous-epochs", "--epochs-min", str(args.epochs_min),
+                "--epochs-max", str(args.epochs_max)]
     print(f"--- {strategy} alpha={alpha} seed={seed} ---")
     result = subprocess.run(cmd, check=True, capture_output=True, text=True)
 
@@ -81,7 +91,7 @@ def run_one(strategy, alpha, seed, args) -> float:
     return final_acc
 
 
-def plot_sweep(summary: pd.DataFrame, out_path: str):
+def plot_sweep(summary: pd.DataFrame, out_path: str, heterogeneous: bool, epochs_min: int, epochs_max: int):
     fig, ax = plt.subplots(figsize=(7, 5), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
     ax.spines["top"].set_visible(False)
@@ -112,8 +122,13 @@ def plot_sweep(summary: pd.DataFrame, out_path: str):
 
     ax.set_xlabel("Dirichlet alpha (lower = more skewed clients)", color=INK_SECONDARY)
     ax.set_ylabel("Final centralized test accuracy", color=INK_SECONDARY)
+    subtitle = (
+        f"(mean ± std over 3 seeds, heterogeneous local epochs {epochs_min}-{epochs_max} per client)"
+        if heterogeneous else
+        "(mean ± std over 3 seeds)"
+    )
     ax.set_title(
-        "FedProx vs. FedAvg across client skew\n(mean ± std over 3 seeds)",
+        f"FedProx vs. FedAvg across client skew\n{subtitle}",
         color=INK_PRIMARY, fontsize=13,
     )
     ax.set_ylim(0, 1)
@@ -139,7 +154,8 @@ def main():
                 rows.append({"alpha": alpha, "seed": seed, "strategy": strategy, "final_accuracy": acc})
 
     results = pd.DataFrame(rows)
-    results_path = os.path.join(DATA_DIR, "alpha_sweep_results.csv")
+    het_suffix = "_heterogeneous" if args.heterogeneous_epochs else ""
+    results_path = os.path.join(DATA_DIR, f"alpha_sweep{het_suffix}_results.csv")
     os.makedirs(DATA_DIR, exist_ok=True)
     results.to_csv(results_path, index=False)
     print(f"\nSaved raw sweep results to {results_path}")
@@ -158,8 +174,8 @@ def main():
               f"{row['mean_accuracy']:>8.4f} {row['std_accuracy']:>8.4f}")
     print(f"{'':>6} {'baseline':<10} {CENTRALIZED_BASELINE_ACCURACY:>8.4f} {'-':>8}")
 
-    out_path = os.path.join(FIGURES_DIR, "alpha_sweep.png")
-    plot_sweep(summary, out_path)
+    out_path = os.path.join(FIGURES_DIR, f"alpha_sweep{het_suffix}.png")
+    plot_sweep(summary, out_path, args.heterogeneous_epochs, args.epochs_min, args.epochs_max)
     print(f"\nSaved sweep chart to {out_path}")
 
 

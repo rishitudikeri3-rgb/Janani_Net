@@ -103,12 +103,40 @@ this sweep does make clear, though:
 - **Skew itself has a real, large effect regardless of strategy** —
   accuracy drops from ~60-62% (alpha 0.5) to ~47% (alpha 0.1). That's the
   core non-IID motivation for this project showing up cleanly; it's just
-  that FedProx's specific fix for it didn't show a measurable edge here.
-  Plausible reasons worth trying next: `--proximal-mu 0.1` may be too weak
-  at this client count, or FedProx's benefit usually shows up more under
-  *partial* client participation per round (stragglers/heterogeneous
-  compute) — this setup always uses all 5 clients every round, which
-  leaves less for the proximal term to correct.
+  that FedProx's specific fix for it didn't show a measurable edge on data
+  skew alone.
+
+Both runs above give every client the same amount of local compute per
+round. FedProx's proximal term isn't actually built for that — it's built
+for *systems* heterogeneity (clients with different compute budgets), so
+that's the next thing worth testing directly rather than guessing.
+
+## Under heterogeneous client compute
+
+Same sweep, same seeds, one change: each client now gets a fixed, seeded
+local-epoch count between 2 and 8 instead of 5 for everyone (mean ~5, so
+the total compute budget across the federation is comparable — it's just
+distributed unevenly, which is the actual variable being isolated here):
+
+| Alpha | FedAvg (mean ± std) | FedProx (mean ± std) |
+|---|---|---|
+| 0.1 (most skewed) | 48.9% ± 4.1 | **50.3% ± 1.3** |
+| 0.3 | 58.8% ± 10.7 | 58.1% ± 9.2 |
+| 0.5 | 60.9% ± 6.2 | 59.6% ± 6.5 |
+
+![Line chart of final centralized accuracy vs. Dirichlet alpha for FedAvg and FedProx under heterogeneous local compute, with error bars across 3 seeds; FedProx edges ahead with a visibly tighter error bar at alpha=0.1, while FedAvg stays slightly ahead at 0.3 and 0.5](figures/alpha_sweep_heterogeneous.png)
+
+**Real, if modest, result: FedProx wins — but only at the harshest
+condition tested, alpha=0.1 combined with heterogeneous compute.** There
+it beats FedAvg by ~1.3 points on average, and — the more interesting
+part — its variance across seeds is a third of FedAvg's (std 1.3 vs 4.1).
+It's not a big margin, but it's noticeably steadier, exactly where the
+proximal term is supposed to help: clients with badly skewed data *and*
+uneven compute drifting apart mid-training. At milder skew (0.3, 0.5),
+FedAvg still edges ahead even with heterogeneous compute added, so this
+isn't "FedProx is just better" — it's specifically the worst-case
+combination where the regularizer earns its keep, which matches its own
+design motivation rather than being a general win.
 
 ## Notes / honest caveats
 
@@ -120,11 +148,13 @@ this sweep does make clear, though:
   the raw vitals (visible in the baseline's per-class report — Mid recall
   is only 0.36 vs. 0.84/0.91 for Low/High); that ceiling is baked into
   every number above, not something federation makes worse.
-- FedProx's proximal term did not measurably beat FedAvg even down to
-  alpha=0.1 (see the sweep above) — before concluding it doesn't help
-  here, worth trying a larger `--proximal-mu` or partial client
-  participation per round, where FedProx's benefit is usually more
-  pronounced.
+- FedProx's proximal term only showed an edge under the harshest combined
+  condition tested — alpha=0.1 *with* heterogeneous client compute (see
+  above) — where it beat FedAvg by ~1.3 points and cut seed-to-seed
+  variance to a third of FedAvg's. Under uniform compute, or at milder
+  skew, FedAvg matched or beat it. Worth testing next: a larger
+  `--proximal-mu` or partial client participation per round, where
+  FedProx's benefit is usually even more pronounced.
 - Flower's own simulation runner (`start_simulation`/`run_simulation`)
   requires the `ray` package, which has no build for Python 3.14 on
   Windows yet. `scripts/run_fl.py` works around this with a manual
@@ -154,6 +184,7 @@ python scripts/test_client.py                 # smoke-test the Flower client in 
 python scripts/run_fl.py --strategy fedprox   # one federated run (fedavg or fedprox)
 python scripts/compare_strategies.py          # both strategies + the comparison chart
 python scripts/sweep_alpha.py                 # both strategies x 3 alphas x 3 seeds + the sweep chart
+python scripts/sweep_alpha.py --heterogeneous-epochs  # same sweep, uneven local compute per client
 ```
 
 Every script is a CLI with `--num-clients`, `--alpha`, `--num-rounds`, etc.

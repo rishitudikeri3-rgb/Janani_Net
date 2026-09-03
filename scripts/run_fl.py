@@ -48,6 +48,14 @@ def parse_args():
     p.add_argument("--local-epochs", type=int, default=5)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--heterogeneous-epochs", action="store_true",
+        help="give each client a different, fixed local_epochs count (seeded) instead of "
+             "--local-epochs for everyone - simulates devices with different compute budgets, "
+             "the systems-heterogeneity scenario FedProx's proximal term targets",
+    )
+    p.add_argument("--epochs-min", type=int, default=2)
+    p.add_argument("--epochs-max", type=int, default=8)
     return p.parse_args()
 
 
@@ -112,8 +120,15 @@ def main():
 
     evaluate_fn = make_evaluate_fn(X_test, y_test)
 
+    if args.heterogeneous_epochs:
+        rng = np.random.default_rng(args.seed)
+        client_epochs = rng.integers(args.epochs_min, args.epochs_max + 1, size=args.num_clients)
+        print(f"Heterogeneous local epochs per client: {dict(enumerate(client_epochs.tolist()))}\n")
+    else:
+        client_epochs = np.full(args.num_clients, args.local_epochs)
+
     def on_fit_config_fn(server_round):
-        return {"local_epochs": args.local_epochs, "lr": args.lr}
+        return {"lr": args.lr}
 
     strategy_kwargs = dict(
         fraction_fit=1.0,
@@ -143,8 +158,9 @@ def main():
 
         params_ndarrays = parameters_to_ndarrays(parameters)
         fit_results = []
-        for client in clients:
-            new_params, num_examples, metrics = client.fit(params_ndarrays, fit_config)
+        for i, client in enumerate(clients):
+            client_fit_config = {**fit_config, "local_epochs": int(client_epochs[i])}
+            new_params, num_examples, metrics = client.fit(params_ndarrays, client_fit_config)
             fit_res = FitRes(
                 status=Status(Code.OK, ""),
                 parameters=ndarrays_to_parameters(new_params),
@@ -181,8 +197,10 @@ def main():
             "train_loss": fit_metrics["train_loss"],
         })
 
+    het_suffix = "_het" if args.heterogeneous_epochs else ""
     out_path = os.path.join(
-        DATA_DIR, f"fl_history_{args.strategy}_a{args.alpha}_n{args.num_clients}_r{args.num_rounds}.csv"
+        DATA_DIR,
+        f"fl_history_{args.strategy}_a{args.alpha}_n{args.num_clients}_r{args.num_rounds}{het_suffix}.csv",
     )
     pd.DataFrame(history).to_csv(out_path, index=False)
     print(f"\nSaved round-by-round history to {out_path}")
